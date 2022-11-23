@@ -1,121 +1,66 @@
 package main
 
 import (
-	"container/list"
 	"fmt"
-	"sync"
+	"net/http"
+	"task_queue/utils"
 )
 
-//Job的类
-type Job struct {
-	DoneChan   chan struct{}
-	handleFunc func(j *Job) error
-}
-
-func (job *Job) Done() {
-	job.DoneChan <- struct{}{}
-	close(job.DoneChan)
-}
-
-func (job *Job) WaitDone() {
-	select {
-	case <-job.DoneChan:
-		return
+func main() {
+	flowControl := NewFlowControl()
+	myHandler := MyHandler{
+		flowControl: flowControl,
 	}
+	http.Handle("/", &myHandler)
+
+	http.ListenAndServe(":3000", nil)
 }
 
-func (job *Job) Execute() error {
-	fmt.Println("job start to execute ")
-	return job.handleFunc(job)
+type MyHandler struct {
+	flowControl *FlowControl
 }
 
-//任务队列
-type JobQueue struct {
-	mu sync.Mutex
-	//任务关闭使用
-	noticeChan chan struct{}
-	//任务队列
-	queue *list.List
-	//任务队列实时大小
-	size int
-	//任务队列初始化的大小
-	capacity int
-}
-
-func NewJobQueue(cap int) *JobQueue {
-	return &JobQueue{
-		capacity:   cap,
-		queue:      list.New(),
-		noticeChan: make(chan struct{}, 1),
-	}
-}
-
-func (q *JobQueue) PushJob(job *Job) {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-	q.size++
-	if q.size > q.capacity {
-		q.RemoveLeastJob()
+func (h *MyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	fmt.Println("recieve http request")
+	job := &utils.Job{
+		DoneChan: make(chan struct{}, 1),
+		HandleFunc: func(job *utils.Job) error {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte("Hello World"))
+			return nil
+		},
 	}
 
-	q.queue.PushBack(job)
-	//通知有任务
-	q.noticeChan <- struct{}{}
+	h.flowControl.CommitJob(job)
+	fmt.Println("commit job to job queue success")
+	job.WaitDone()
 }
 
-func (q *JobQueue) PopJob() *Job {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	if q.size == 0 {
-		return nil
-	}
-
-	q.size--
-	return q.queue.Remove(q.queue.Front()).(*Job)
+type FlowControl struct {
+	jobQueue *utils.JobQueue
+	wm       *utils.WorkerManager
 }
 
-func (q *JobQueue) RemoveLeastJob() {
-	if q.queue.Len() != 0 {
-		back := q.queue.Back()
-		abandonJob := back.Value.(*Job)
-		abandonJob.Done()
-		q.queue.Remove(back)
-	}
-}
+func NewFlowControl() *FlowControl {
+	jobQueue := utils.NewJobQueue(10)
+	fmt.Println("init job queue success")
 
-func (q *JobQueue) waitJob() <-chan struct{} {
-	return q.noticeChan
-}
+	m := utils.NewWorkerManager(jobQueue)
+	//注册两个worker
+	m.CreateWorker(1)
+	m.CreateWorker(2)
+	fmt.Println("init worker success")
 
-type WorkerManager struct {
-	jobQueue *JobQueue
-}
-
-func NewWorkerManager(jobQueue *JobQueue) *WorkerManager {
-	return &WorkerManager{
+	control := &FlowControl{
 		jobQueue: jobQueue,
+		wm:       m,
 	}
+
+	fmt.Println("init flowcontrol success")
+	return control
 }
 
-func (m *WorkerManager) createWorker() error {
-
-	go func() {
-		fmt.Println("start worker success")
-		var job *Job
-
-		for {
-			select {
-			case <-m.jobQueue.waitJob():
-				fmt.Println("get a job from job queue")
-				job = m.jobQueue.PopJob()
-				fmt.Println("start to execute job")
-				job.Execute()
-				fmt.Print("job done")
-				job.Done()
-			}
-		}
-	}()
-
-	return nil
+func (c *FlowControl) CommitJob(job *utils.Job) {
+	c.jobQueue.PushJob(job)
+	fmt.Println("commit job success")
 }
