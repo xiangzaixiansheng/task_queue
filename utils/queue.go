@@ -98,7 +98,7 @@ func NewWorkerManager(jobQueue *JobQueue) *WorkerManager {
 	}
 }
 
-func (m *WorkerManager) CreateWorker(num int) error {
+func (m *WorkerManager) CreateWorker(workerName int) error {
 
 	go func(index int) {
 		fmt.Println("start worker success")
@@ -115,7 +115,7 @@ func (m *WorkerManager) CreateWorker(num int) error {
 				job.Done()
 			}
 		}
-	}(num)
+	}(workerName)
 
 	return nil
 }
